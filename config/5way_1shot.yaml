@@ -1,0 +1,95 @@
+# config/5way_1shot.yaml
+
+experiment_name: "5wa_1s_All"
+
+# Episode shape
+n_way: 5              # classes per episode
+k_shot: 1             # support images per class
+q_query: 15           # query images per class
+
+# Training
+is_train: true
+epochs: 200
+train_patience: 10
+resume: false         # set true to resume from last checkpoint
+best: true            # when loading for test, prefer best checkpoint
+batch_size: 1         # episodes per batch (keep 1 for stability)
+eval_batch_size: 1
+episodes_per_epoch: 200
+val_episodes: 200
+prefetch_factor: 2
+
+# Optimization
+optimizer: "adam"
+lr: 0.001
+weight_decay: 0.0
+momentum: 0.9         # used if optimizer is sgd/rmsprop
+lr_scheduler: "ReduceLROnPlateau"  # [ReduceLROnPlateau, CosineAnnealing, Step]
+lr_factor: 0.5
+lr_patience: 5
+min_lr: 1.0e-6
+step_size: 20         # for StepLR
+gamma: 0.1            # for StepLR/cosine combos
+
+# Device / workers
+use_gpu: true
+num_workers: 4
+pin_memory: true
+persistent_workers: true
+random_seed: 1
+amp: false            # mixed precision training toggle
+grad_clip: 0.0        # set >0 (e.g., 1.0) to enable clipping
+
+# Directories
+ckpt_dir: "./ckpt"
+logs_dir: "./logs"
+plot_dir: "./plots"
+data_dir: "./data/MSTAR"
+
+# Logging
+flush: false
+num_model: 1
+
+# ------- Multi-task loss weights -------
+lambda_rel: 1.0       # relation (primary)
+lambda_sim: 0.2       # similarity aux regularizer
+lambda_dissim: 0.2    # dissimilarity aux regularizer
+lambda_cls: 0.25      # classifier aux regularizer
+
+# ------- Prototype-style episodic loss (A2) on C-Net only -------
+use_proto_loss: true          # enable A2 prototype loss
+lambda_proto: 0.3             # weight of prototype loss in total objective
+proto_metric: "euclidean"     # ["euclidean","cosine"]
+proto_normalize: true         # L2-normalize features before distance
+proto_temperature: 1.0        # softmax temperature over class distances
+
+# Classifier head LR multiplier (optional)
+cls_lr: 0.003                 # if base lr is 0.001
+
+# ------- Relation module aggregation & ablation controls -------
+agg_method: "mean"            # ["mean","max"] over support per class
+relation_used_branches: ["S","D","C"]  # subset of {"S","D","C"}
+branch_dropout_p: 0.0         # >0 to randomly drop branch inputs during TRAIN
+learnable_gates: false        # per-branch learnable α gates (0..1)
+
+# Fine-tuning (ONLY used in test stage on unseen classes)
+fine_tune: false
+fine_tune_epochs: 5
+fine_tune_lr: 5.0e-5
+fine_tune_opt: "adam"
+fine_tune_classifier: true
+fine_tune_relation: true
+# Optional: choose branches during test without retraining
+test_relation_used_branches: ["S","D","C"]
+num_episodes: 1000            # episodes for evaluation in test
+
+# Augmentation
+augmentation:
+  flip: true
+  rotate: true
+  jitter: true
+
+# Checkpoints
+checkpoint:
+  save_best_only: true
+  checkpoint_freq: 10

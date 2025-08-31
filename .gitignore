@@ -6,6 +6,11 @@ __pycache__/
 # C extensions
 *.so
 
+# Checkpoints, logs and other files
+ckpt/
+logs/
+plots/
+
 # Distribution / packaging
 .Python
 build/
