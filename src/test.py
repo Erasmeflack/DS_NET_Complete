@@ -28,41 +28,106 @@ def _episodic_iter(loader):
 
 
 def _fine_tune_on_support(model, support_imgs, support_labels, query_imgs, query_labels, cfg):
-    """Fine-tune relation/C-Net on the episode's support set (optionally queries too)."""
+    """
+    Fine-tune on the current episode depending on which modules are selected:
+      - classifier only: classification CE on C-Net logits (query -> logits via forward_pairwise(q,q))
+      - relation only:   relation CE on relation scores (query vs support)
+      - both:            weighted sum of relation CE + classification CE
+    """
     if not cfg.get("fine_tune", False):
         return
 
-    # Freeze all first, then unfreeze selected
+    device = cfg["device"]
+    model.train()
+
+    # 1) Freeze everything, then unfreeze chosen modules
     for p in model.parameters():
         p.requires_grad = False
 
+    ft_cls  = bool(cfg.get("fine_tune_classifier", True))
+    ft_rel  = bool(cfg.get("fine_tune_relation", False))
+
     params = []
-    if cfg.get("fine_tune_classifier", True) and hasattr(model, "classifier"):
+    used_modules = []
+
+    if ft_cls and hasattr(model, "classifier"):
         for p in model.classifier.parameters():
             p.requires_grad = True
         params += list(model.classifier.parameters())
-    if cfg.get("fine_tune_relation", False) and hasattr(model, "relation_module"):
+        used_modules.append("classifier")
+
+    if ft_rel and hasattr(model, "relation_module"):
         for p in model.relation_module.parameters():
             p.requires_grad = True
         params += list(model.relation_module.parameters())
+        used_modules.append("relation_module")
 
     if not params:
+        print("[fine-tune] No modules selected; skipping fine-tuning.")
+        model.eval()
+        for p in model.parameters():
+            p.requires_grad = False
         return
 
+    # 2) Optimizer and schedule
     opt_name = cfg.get("fine_tune_opt", "adam").lower()
-    lr = cfg.get("fine_tune_lr", 5e-5)
+    lr = float(cfg.get("fine_tune_lr", 5e-5))
+    epochs = int(cfg.get("fine_tune_epochs", 5))
+
     OptimCls = getattr(torch.optim, opt_name.capitalize(), torch.optim.Adam)
     optimizer = OptimCls(params, lr=lr)
 
-    model.train()
-    epochs = int(cfg.get("fine_tune_epochs", 5))
-    for _ in range(epochs):
-        optimizer.zero_grad()
-        rel_scores, _ = model(query_imgs, support_imgs)
-        loss = relation_loss(rel_scores, query_labels, support_labels, cfg["n_way"])
-        loss.backward()
-        optimizer.step()
+    lam_rel = float(cfg.get("ft_lambda_rel", 1.0))
+    lam_cls = float(cfg.get("ft_lambda_cls", 1.0))
 
+    # 3) Print plan
+    loss_plan = []
+    if ft_rel: loss_plan.append("relationCE")
+    if ft_cls: loss_plan.append("classCE")
+    print(f"[fine-tune] Modules: {', '.join(used_modules)} | losses: {', '.join(loss_plan)} | "
+          f"optimizer={OptimCls.__name__} | lr={lr} | epochs={epochs}")
+
+    # Ensure tensors are on device and shaped right
+    support_imgs   = support_imgs.to(device)
+    support_labels = support_labels.view(-1).to(device)
+    query_imgs     = query_imgs.to(device)
+    query_labels   = query_labels.view(-1).to(device)
+
+    # 4) Run a few epochs on the episode
+    for ep in range(epochs):
+        optimizer.zero_grad()
+        total_loss = 0.0
+
+        # Relation loss branch (if enabled)
+        if ft_rel:
+            rel_scores, _ = model(query_imgs, support_imgs)  # (Q,S,1)
+            rel_ce = relation_loss(rel_scores, query_labels, support_labels, cfg["n_way"])
+            total_loss = total_loss + lam_rel * rel_ce
+
+        # Classification loss branch (if enabled)
+        if ft_cls:
+            # Build logits for all queries using C-Net path (classifier head)
+            cls_logits_list = []
+            for q_idx in range(query_imgs.size(0)):
+                q = query_imgs[q_idx].unsqueeze(0)
+                # forward_pairwise returns (sim_score, dis_score, class_logits)
+                _, _, logits = model.forward_pairwise(q, q)
+                cls_logits_list.append(logits)
+            if cls_logits_list:
+                cls_logits = torch.cat(cls_logits_list, dim=0)  # [Q, n_way]
+                cls_ce = torch.nn.functional.cross_entropy(cls_logits, query_labels)
+                total_loss = total_loss + lam_cls * cls_ce
+            else:
+                cls_ce = torch.tensor(0.0, device=device)
+
+        # Safety: if for some reason total_loss has no grad (shouldn't happen), skip
+        if not hasattr(total_loss, "backward"):
+            print("[fine-tune] Warning: loss has no backward; skipping this FT step.")
+        else:
+            total_loss.backward()
+            optimizer.step()
+
+    # 5) Back to eval, keep grads off
     model.eval()
     for p in model.parameters():
         p.requires_grad = False
@@ -117,22 +182,30 @@ def _apply_ablation(model, mode: str = "full", cfg=None):
     # Keep mode string for reference if the model wants it
     setattr(model, "ablation_mode", mode)
 
+    print(f"[ablation] mode={mode} | use_top={use_top}, use_mid={use_mid}, use_bottom={use_bottom}")
+
 
 def _evaluate_one_mode(cfg, model, test_loader, class_names, mode_tag: str):
     """
     Evaluate one ablation mode over cfg['num_episodes'] episodes.
-    One batch = one episode.
+    One batch = one episode. Logs per-episode accuracy to CSV.
     """
-    import os
-    from src.trainer.plot_confusion import plot_confusion_from_preds
-
     device = cfg["device"]
     num_episodes = int(cfg.get("num_episodes", 1000))
+    base_log_dir = os.path.join(cfg.get("logs_dir", "./logs"), f"{cfg['experiment_name']}")
+    os.makedirs(base_log_dir, exist_ok=True)
+
+    # Per-episode accuracy CSV for this mode
+    iter_csv = os.path.join(base_log_dir, f"test_iter_{mode_tag}.csv")
+    with open(iter_csv, "w", newline="") as f:
+        csv.writer(f).writerow(["episode", "accuracy", "num_queries", "correct", "timestamp"])
+
     plot_dir = os.path.join(cfg.get("plot_dir", "./plots"), f"{cfg['experiment_name']}")
     os.makedirs(plot_dir, exist_ok=True)
 
     best_acc, worst_acc = -1.0, 101.0
     sum_acc = 0.0
+    processed_eps = 0
     best_preds, best_labels = [], []
     worst_preds, worst_labels = [], []
 
@@ -144,7 +217,11 @@ def _evaluate_one_mode(cfg, model, test_loader, class_names, mode_tag: str):
             support_imgs, support_labels, query_imgs, query_labels = next(loader_iter)
         except StopIteration:
             loader_iter = iter(test_loader)
-            support_imgs, support_labels, query_imgs, query_labels = next(loader_iter)
+            try:
+                support_imgs, support_labels, query_imgs, query_labels = next(loader_iter)
+            except StopIteration:
+                # Empty loader—nothing to evaluate
+                break
 
         # Move to device & normalize shape
         support_imgs   = support_imgs.to(device)
@@ -156,11 +233,20 @@ def _evaluate_one_mode(cfg, model, test_loader, class_names, mode_tag: str):
             # skip empty episode, don't count towards average
             continue
 
+        if cfg.get("fine_tune", False):
+            print(f"[fine-tune:{mode_tag}] Starting per-episode fine-tune...")
+            _fine_tune_on_support(model, support_imgs, support_labels, query_imgs, query_labels, cfg)
+
         # Inference for this episode
         with torch.no_grad():
             relation_scores, _ = model(query_imgs, support_imgs)
             if relation_scores is None or relation_scores.numel() == 0:
+                # log as 0% accuracy if something odd occurs
+                ep_acc = 0.0
+                with open(iter_csv, "a", newline="") as f:
+                    csv.writer(f).writerow([ep, f"{ep_acc:.2f}", 0, 0, time.strftime("%Y-%m-%d %H:%M:%S")])
                 continue
+
             preds = model.predict_from_relations(relation_scores, support_labels)  # [Q]
 
         # Compute episode acc
@@ -168,9 +254,15 @@ def _evaluate_one_mode(cfg, model, test_loader, class_names, mode_tag: str):
         labels_list = query_labels.detach().cpu().tolist()
 
         correct = sum(int(p == l) for p, l in zip(preds_list, labels_list))
-        ep_acc = 100.0 * correct / len(labels_list)
+        ep_acc = 100.0 * correct / max(1, len(labels_list))
         sum_acc += ep_acc
+        processed_eps += 1
 
+        # --- per-episode logging ---
+        with open(iter_csv, "a", newline="") as f:
+            csv.writer(f).writerow([ep, f"{ep_acc:.2f}", len(labels_list), correct, time.strftime("%Y-%m-%d %H:%M:%S")])
+
+        # Track best/worst for confusion plots
         if ep_acc > best_acc:
             best_acc = ep_acc
             best_preds, best_labels = list(preds_list), list(labels_list)
@@ -179,8 +271,8 @@ def _evaluate_one_mode(cfg, model, test_loader, class_names, mode_tag: str):
             worst_acc = ep_acc
             worst_preds, worst_labels = list(preds_list), list(labels_list)
 
-    # Average over actual evaluated episodes
-    avg_acc = sum_acc / max(1, num_episodes)
+    # Average over episodes actually processed
+    avg_acc = sum_acc / max(1, processed_eps)
 
     # Confusions (guard empties)
     if best_labels:
@@ -213,6 +305,7 @@ def _evaluate_one_mode(cfg, model, test_loader, class_names, mode_tag: str):
     if worst_acc > 100.0:
         worst_acc = 0.0
 
+    print(f"[test:{mode_tag}] per-episode log -> {iter_csv}")
     return best_acc, avg_acc, worst_acc
 
 

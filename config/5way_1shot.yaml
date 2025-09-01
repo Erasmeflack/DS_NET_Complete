@@ -62,11 +62,11 @@ proto_temp: 1.0                 # softmax temperature for proto scores
 
 # ----- Fine-tuning (ONLY for test on unseen classes) -----
 fine_tune: true
-fine_tune_epochs: 5
-fine_tune_lr: 5.0e-5
+fine_tune_epochs: 1
+fine_tune_lr: 1.0e-5
 fine_tune_opt: "adam"
 fine_tune_classifier: true
-fine_tune_relation: true
+fine_tune_relation: false
 
 # ----- Evaluation / test episodic count -----
 num_episodes: 1000

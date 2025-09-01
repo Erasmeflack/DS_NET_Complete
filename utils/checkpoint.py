@@ -7,7 +7,7 @@ def _ckpt_dir(cfg):
     return os.path.join(cfg["ckpt_dir"], f"{cfg['experiment_name']}")
 
 def save_checkpoint(cfg, model, optimizer, epoch, is_best=False, best_val_acc=None):
-    ckpt_dir = _ckpt_dir(cfg)
+    ckpt_dir = os.path.join(cfg["ckpt_dir"], f"{cfg['experiment_name']}")
     os.makedirs(ckpt_dir, exist_ok=True)
 
     if best_val_acc is None:
