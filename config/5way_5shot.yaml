@@ -1,5 +1,5 @@
 # config/5way_1shot.yaml
-experiment_name: "5way_5shot_all"
+experiment_name: "5way_5shot_C_S"
 
 # ----- Episode shape -----
 n_way: 5

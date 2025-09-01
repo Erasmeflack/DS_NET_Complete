@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from models.dual_snn import DualSiameseNet
 from data.load_data import get_mstar_dataloader
-from src.trainer.plot_confusion import compute_confusion_matrix
+from src.trainer.plot_confusion import plot_confusion_from_preds
 from utils.checkpoint import load_checkpoint
 from src.trainer.utils import relation_loss
 
@@ -120,86 +120,98 @@ def _apply_ablation(model, mode: str = "full", cfg=None):
 
 def _evaluate_one_mode(cfg, model, test_loader, class_names, mode_tag: str):
     """
-    Runs evaluation for a single ablation mode.
-    Returns (best_acc, avg_acc, worst_acc).
-    Also writes logs and confusion matrices for this mode.
+    Evaluate one ablation mode over cfg['num_episodes'] episodes.
+    One batch = one episode.
     """
+    import os
+    from src.trainer.plot_confusion import plot_confusion_from_preds
+
     device = cfg["device"]
-
-    # CSV logging (per mode)
-    log_dir = os.path.join(cfg["logs_dir"], f"exp_{cfg['experiment_name']}")
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f"{mode_tag}_test_accuracy.csv")
-    with open(log_file, "w", newline="") as f:
-        csv.writer(f).writerow(["episode", "accuracy", "timestamp"])
-
     num_episodes = int(cfg.get("num_episodes", 1000))
-    best_acc = 0.0
-    worst_acc = 101.0
-    total_acc = 0.0
+    plot_dir = os.path.join(cfg.get("plot_dir", "./plots"), f"{cfg['experiment_name']}")
+    os.makedirs(plot_dir, exist_ok=True)
+
+    best_acc, worst_acc = -1.0, 101.0
+    sum_acc = 0.0
     best_preds, best_labels = [], []
     worst_preds, worst_labels = [], []
 
-    print(f"\n[*] [{mode_tag}] Evaluating over {num_episodes} few-shot episodes...")
-    ep_iter = _episodic_iter(test_loader)
+    loader_iter = iter(test_loader)
 
-    for ep in tqdm(range(num_episodes), desc=f"Episodes ({mode_tag})"):
+    for ep in range(num_episodes):
+        # --- fetch exactly one episode ---
         try:
-            support_imgs, support_labels, query_imgs, query_labels = next(ep_iter)
+            support_imgs, support_labels, query_imgs, query_labels = next(loader_iter)
         except StopIteration:
-            ep_iter = _episodic_iter(test_loader)
-            support_imgs, support_labels, query_imgs, query_labels = next(ep_iter)
+            loader_iter = iter(test_loader)
+            support_imgs, support_labels, query_imgs, query_labels = next(loader_iter)
 
-        support_imgs  = support_imgs.to(device, non_blocking=True)
-        support_labels= support_labels.to(device, non_blocking=True)
-        query_imgs    = query_imgs.to(device, non_blocking=True)
-        query_labels  = query_labels.to(device, non_blocking=True)
+        # Move to device & normalize shape
+        support_imgs   = support_imgs.to(device)
+        support_labels = support_labels.view(-1).to(device)
+        query_imgs     = query_imgs.to(device)
+        query_labels   = query_labels.view(-1).to(device)
 
-        # Optional per-episode fine-tune
-        if cfg.get("fine_tune", False):
-            _fine_tune_on_support(model, support_imgs, support_labels, query_imgs, query_labels, cfg)
+        if query_labels.numel() == 0:
+            # skip empty episode, don't count towards average
+            continue
 
-        # Evaluate
-        model.eval()
+        # Inference for this episode
         with torch.no_grad():
             relation_scores, _ = model(query_imgs, support_imgs)
-            preds = model.predict_from_relations(relation_scores, support_labels)
+            if relation_scores is None or relation_scores.numel() == 0:
+                continue
+            preds = model.predict_from_relations(relation_scores, support_labels)  # [Q]
 
-        preds_np  = preds.detach().cpu().numpy().tolist()
-        labels_np = query_labels.detach().cpu().numpy().tolist()
+        # Compute episode acc
+        preds_list  = preds.detach().cpu().tolist()
+        labels_list = query_labels.detach().cpu().tolist()
 
-        # Episode accuracy
-        correct = sum(1 for p, l in zip(preds_np, labels_np) if p == l)
-        ep_acc = 100.0 * correct / max(1, len(labels_np))
-        total_acc += ep_acc
+        correct = sum(int(p == l) for p, l in zip(preds_list, labels_list))
+        ep_acc = 100.0 * correct / len(labels_list)
+        sum_acc += ep_acc
 
-        # Log CSV
-        with open(log_file, "a", newline="") as f:
-            csv.writer(f).writerow([ep + 1, ep_acc, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())])
-
-        # Track best and worst episodes
         if ep_acc > best_acc:
             best_acc = ep_acc
-            best_preds = preds_np
-            best_labels = labels_np
+            best_preds, best_labels = list(preds_list), list(labels_list)
+
         if ep_acc < worst_acc:
             worst_acc = ep_acc
-            worst_preds = preds_np
-            worst_labels = labels_np
+            worst_preds, worst_labels = list(preds_list), list(labels_list)
 
-    avg_acc = total_acc / max(1, num_episodes)
+    # Average over actual evaluated episodes
+    avg_acc = sum_acc / max(1, num_episodes)
 
-    # Confusion matrices for the best & worst episode (per mode)
-    plot_dir = os.path.join(cfg["plot_dir"], f"exp_{cfg['experiment_name']}")
-    os.makedirs(plot_dir, exist_ok=True)
-    best_path  = os.path.join(plot_dir, f"{mode_tag}_best_confusion.png")
-    worst_path = os.path.join(plot_dir, f"{mode_tag}_worst_confusion.png")
-    compute_confusion_matrix(best_preds, best_labels, save_path=best_path,  class_names=class_names)
-    compute_confusion_matrix(worst_preds, worst_labels, save_path=worst_path, class_names=class_names)
+    # Confusions (guard empties)
+    if best_labels:
+        best_path = os.path.join(plot_dir, f"confmat_best_{mode_tag}.png")
+        plot_confusion_from_preds(
+            best_preds, best_labels,
+            save_path=best_path,
+            class_names=class_names,
+            normalize=False,
+            title=f"Best Episode · mode={mode_tag}"
+        )
+    else:
+        print(f"[test:{mode_tag}] No valid best-episode data to plot.")
 
-    print(f"[*] [{mode_tag}] Best Episode Accuracy:  {best_acc:.2f}%  (confusion @ {best_path})")
-    print(f"[*] [{mode_tag}] Worst Episode Accuracy: {worst_acc:.2f}%  (confusion @ {worst_path})")
-    print(f"[*] [{mode_tag}] Average Accuracy over {num_episodes} episodes: {avg_acc:.2f}%")
+    if worst_labels:
+        worst_path = os.path.join(plot_dir, f"confmat_worst_{mode_tag}.png")
+        plot_confusion_from_preds(
+            worst_preds, worst_labels,
+            save_path=worst_path,
+            class_names=class_names,
+            normalize=False,
+            title=f"Worst Episode · mode={mode_tag}"
+        )
+    else:
+        print(f"[test:{mode_tag}] No valid worst-episode data to plot.")
+
+    # Normalize sentinel values if nothing was evaluated
+    if best_acc < 0:
+        best_acc = 0.0
+    if worst_acc > 100.0:
+        worst_acc = 0.0
 
     return best_acc, avg_acc, worst_acc
 
@@ -222,7 +234,7 @@ def test(cfg):
         persistent_workers=True,
     )
 
-    # Class names for confusion matrix
+    # Class names for confusion matrix (unseen test classes)
     class_names = sorted([d for d in os.listdir(test_data_dir) if os.path.isdir(os.path.join(test_data_dir, d))])
 
     # Determine ablation plan
@@ -232,36 +244,37 @@ def test(cfg):
         ablation_modes = [cfg.get("ablation_mode", "full")]
 
     # Per-mode summary CSV
-    log_dir = os.path.join(cfg["logs_dir"], f"exp_{cfg['experiment_name']}")
+    log_dir = os.path.join(cfg["logs_dir"], f"{cfg['experiment_name']}")
     os.makedirs(log_dir, exist_ok=True)
     summary_csv = os.path.join(log_dir, "ablation_summary.csv")
     with open(summary_csv, "w", newline="") as f:
         csv.writer(f).writerow(["mode", "best_acc", "avg_acc", "worst_acc"])
 
     summary = []
-    for mode in ablation_modes:
+    for mode_tag in ablation_modes:
         # Fresh model per mode (ensures no contamination from fine-tuning in prior mode)
         model = DualSiameseNet(
             num_classes=cfg["n_way"],
             agg_method=cfg.get("agg_method", "mean"),
-            device=device
+            device=device,
+            relation_used_branches=cfg.get("train_relation_used_branches", ["S","D","C"])
         ).to(device)
 
         # Load best/latest weights
         load_checkpoint(model, cfg, optimizer=None, best=cfg.get("best", True))
 
         # Apply ablation
-        _apply_ablation(model, mode, cfg)
+        _apply_ablation(model, mode_tag, cfg)
 
         # Evaluate this mode
-        best_acc, avg_acc, worst_acc = _evaluate_one_mode(cfg, model, test_loader, class_names, mode)
-        summary.append((mode, best_acc, avg_acc, worst_acc))
+        best_acc, avg_acc, worst_acc = _evaluate_one_mode(cfg, model, test_loader, class_names, mode_tag)
+        summary.append((mode_tag, best_acc, avg_acc, worst_acc))
 
         # Append to summary CSV
         with open(summary_csv, "a", newline="") as f:
-            csv.writer(f).writerow([mode, f"{best_acc:.2f}", f"{avg_acc:.2f}", f"{worst_acc:.2f}"])
+            csv.writer(f).writerow([mode_tag, f"{best_acc:.2f}", f"{avg_acc:.2f}", f"{worst_acc:.2f}"])
 
     # Print short summary
     print("\n=== Ablation Summary ===")
-    for mode, best_acc, avg_acc, worst_acc in summary:
-        print(f"{mode:>12} | Best: {best_acc:6.2f}% | Avg: {avg_acc:6.2f}% | Worst: {worst_acc:6.2f}%")
+    for mode_tag, best_acc, avg_acc, worst_acc in summary:
+        print(f"{mode_tag:>12} | Best: {best_acc:6.2f}% | Avg: {avg_acc:6.2f}% | Worst: {worst_acc:6.2f}%")

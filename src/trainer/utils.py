@@ -17,7 +17,7 @@ def similarity_loss(f1, f2):
     return -loss.mean()
 
 
-def dissimilarity_loss(f1, f2, margin=2.5):
+def dissimilarity_loss(f1, f2, margin=3.5):
     """Dissimilarity Loss: Penalize distances above margin."""
     distance = torch.norm(f1 - f2, p=2, dim=1)
     loss = torch.relu(distance - margin) ** 2

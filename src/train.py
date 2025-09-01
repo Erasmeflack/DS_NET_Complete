@@ -72,27 +72,27 @@ def _make_scheduler(optimizer, cfg):
     return None
 
 
-def _ablation_suffix(cfg):
-    """
-    Build a short suffix describing the ablation setting for logging/ckpt dirs.
-    """
-    ab = cfg.get("ablation", {})
-    rel = int(ab.get("relation_enabled", True))
-    use_s = int(ab.get("use_similarity", True))
-    use_d = int(ab.get("use_dissimilarity", True))
-    use_c = int(ab.get("use_classification", True))
-    return f"rel{rel}_S{use_s}_D{use_d}_C{use_c}"
+# def _ablation_suffix(cfg):
+#     """
+#     Build a short suffix describing the ablation setting for logging/ckpt dirs.
+#     """
+#     ab = cfg.get("ablation", {})
+#     rel = int(ab.get("relation_enabled", True))
+#     use_s = int(ab.get("use_similarity", True))
+#     use_d = int(ab.get("use_dissimilarity", True))
+#     use_c = int(ab.get("use_classification", True))
+#     return f"rel{rel}_S{use_s}_D{use_d}_C{use_c}"
 
 
-def _apply_ablation_to_cfg(cfg):
-    """
-    Mutate cfg['experiment_name'] to include ablation suffix so logs/ckpts are isolated per run.
-    """
-    suffix = _ablation_suffix(cfg)
-    base_name = cfg.get("experiment_name", "exp")
-    # Avoid double-appending if resuming
-    if not base_name.endswith(suffix):
-        cfg["experiment_name"] = f"{base_name}_{suffix}"
+# def _apply_ablation_to_cfg(cfg):
+#     """
+#     Mutate cfg['experiment_name'] to include ablation suffix so logs/ckpts are isolated per run.
+#     """
+#     suffix = _ablation_suffix(cfg)
+#     base_name = cfg.get("experiment_name", "exp")
+#     # Avoid double-appending if resuming
+#     if not base_name.endswith(suffix):
+#         cfg["experiment_name"] = f"{base_name}_{suffix}"
 
 
 def train(cfg):
@@ -105,7 +105,7 @@ def train(cfg):
     _set_seed(int(cfg.get("random_seed", 1)))
 
     # Apply ablation into experiment name so each run is isolated
-    _apply_ablation_to_cfg(cfg)
+    #_apply_ablation_to_cfg(cfg)
 
     train_data_dir = os.path.join(cfg["data_dir"], "train")
     val_data_dir   = os.path.join(cfg["data_dir"], "validate")
@@ -152,11 +152,7 @@ def train(cfg):
         num_classes=cfg["n_way"],
         agg_method=cfg.get("agg_method", "mean"),
         device=device,
-        # ablation controls
-        relation_enabled=relation_enabled,
-        use_similarity=use_similarity,
-        use_dissimilarity=use_dissimilarity,
-        use_classification=use_classification,
+        relation_used_branches=cfg.get("train_relation_used_branches", ["S","D","C"])
     ).to(device)
 
     # Optimizer & Scheduler
@@ -201,7 +197,7 @@ def train(cfg):
         if is_best:
             best_val_acc = val_acc
 
-        save_checkpoint(cfg, model, optimizer, epoch, is_best=is_best)
+        save_checkpoint(cfg, model, optimizer, epoch, is_best=is_best, best_val_acc=best_val_acc)
 
         # Early stopping
         if not is_best:

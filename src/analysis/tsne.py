@@ -90,7 +90,7 @@ def tsne_one_val_episode(model, val_loader, cfg, tag: str = "start"):
     """
     device = cfg["device"]
     exp = cfg["experiment_name"]
-    plot_dir = os.path.join(cfg.get("plot_dir","./plots"), f"exp_{exp}")
+    plot_dir = os.path.join(cfg.get("plot_dir","./plots"), f"{exp}")
     os.makedirs(plot_dir, exist_ok=True)
 
     # 1) grab one episode

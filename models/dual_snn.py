@@ -20,19 +20,25 @@ class DualSiameseNet(nn.Module):
     to keep ablations clean for your A2/prototype-style experiments.
     """
     def __init__(
-        self,
-        freeze_top=False,
-        freeze_mid=False,
+        self, 
+        freeze_top=False, 
+        freeze_mid=False, 
         freeze_bottom=False,
-        num_classes=5,
-        agg_method="mean",
+        num_classes=5, 
+        agg_method="mean", 
         device=None,
-        # relation inputs (defaults = original behavior)
-        use_s_in_relation: bool = True,
-        use_d_in_relation: bool = True,
-        use_mid_in_relation: bool = True,
+        relation_used_branches=("S","D","C")  # <- single unified argument
     ):
         super(DualSiameseNet, self).__init__()
+        
+         # --- normalize ablation branches to booleans ---
+        if relation_used_branches is None:
+            relation_used_branches = ("S","D","C")
+        rset = {b.upper() for b in relation_used_branches}
+        self.use_s_in_relation   = "S" in rset
+        self.use_d_in_relation   = "D" in rset
+        self.use_mid_in_relation = "C" in rset
+        self.relation_used_branches = tuple(sorted(rset))
 
         # Branches
         self.top_branch = SiameseBranch()      # S-Net
@@ -55,10 +61,6 @@ class DualSiameseNet(nn.Module):
         self.num_classes = num_classes
         self.agg_method  = agg_method
 
-        # Ablation toggles for relation inputs
-        self.use_s_in_relation   = use_s_in_relation
-        self.use_d_in_relation   = use_d_in_relation
-        self.use_mid_in_relation = use_mid_in_relation
 
         # Freezing
         self._freeze_branch(self.top_branch, freeze_top)
