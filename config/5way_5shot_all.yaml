@@ -1,5 +1,5 @@
-# config/5way_1shot.yaml
-experiment_name: "5way_5shot_C_S"
+# config/5way_5shot_all.yaml
+experiment_name: "5way_5shot_all"
 
 # ----- Episode shape -----
 n_way: 5
@@ -7,7 +7,7 @@ k_shot: 5
 q_query: 15
 
 # ----- Training -----
-is_train: false
+is_train: true
 epochs: 200
 episodes_per_epoch: 200         # cap per epoch (speeds up)
 val_episodes: 200               # cap for validation loop
@@ -62,10 +62,10 @@ proto_temp: 1.0                 # softmax temperature for proto scores
 
 # ----- Fine-tuning (ONLY for test on unseen classes) -----
 fine_tune: true
-fine_tune_epochs: 5
-fine_tune_lr: 5.0e-5
+fine_tune_epochs: 1
+fine_tune_lr: 1.0e-5
 fine_tune_opt: "adam"
-fine_tune_classifier: true
+fine_tune_classifier: false
 fine_tune_relation: true
 
 # ----- Evaluation / test episodic count -----
@@ -80,12 +80,17 @@ augmentation:
 # ----- Checkpoints -----
 checkpoint:
   save_best_only: true
-  checkpoint_freq: 10
+  checkpoint_freq: 5
 
 # ----- Ablation controls -----
 # At TRAIN time: choose which branches feed the Relation module.
 # Options per branch token: "S" (similarity/top), "D" (dissimilarity/bottom), "C" (classification/mid)
-train_relation_used_branches: ["S", "D", "C"]
+ablation_mode: "all"   # all | s_c | d_c | s_d | s | d | c
+relation_used_branches: ["S", "D", "C"]
+
+freeze_top: false
+freeze_mid: false
+freeze_bottom: false
 
 # At TEST time: can run multiple ablations without retraining
 # The test script can iterate these modes and report per-mode metrics.

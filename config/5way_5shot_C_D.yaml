@@ -1,0 +1,104 @@
+# config/5way_5shot_C_D.yaml
+experiment_name: "5way_5shot_C_D"
+
+# ----- Episode shape -----
+n_way: 5
+k_shot: 5
+q_query: 15
+
+# ----- Training -----
+is_train: true
+epochs: 200
+episodes_per_epoch: 200         # cap per epoch (speeds up)
+val_episodes: 200               # cap for validation loop
+train_patience: 10
+resume: false                   # resume from latest ckpt
+best: true                      # prefer best ckpt when loading for eval
+batch_size: 1                   # 1 episode per batch (stable)
+eval_batch_size: 1
+prefetch_factor: 2
+
+# ----- Optimization -----
+optimizer: "adam"               # adam | adamw | sgd | rmsprop
+lr: 0.001
+weight_decay: 0.0
+momentum: 0.9                   # used by sgd/rmsprop
+lr_scheduler: "ReduceLROnPlateau"   # ReduceLROnPlateau | CosineAnnealing | Step
+lr_factor: 0.5
+lr_patience: 5
+min_lr: 1.0e-6
+step_size: 20
+gamma: 0.1
+
+# Optional separate head LR (if you wire per-parameter groups)
+cls_lr: 0.003
+
+# ----- Device / workers -----
+use_gpu: true
+num_workers: 4
+random_seed: 1
+amp: false                      # mixed precision
+grad_clip: 0.0                  # e.g., 1.0 to enable
+
+# ----- Directories -----
+ckpt_dir: "./ckpt"
+logs_dir: "./logs"
+plot_dir: "./plots"
+data_dir: "./data/MSTAR"
+
+# ----- Logging -----
+flush: false
+num_model: 1
+
+# ----- Loss weights (joint multi-task) -----
+lambda_rel: 1.0                 # relation (primary)
+lambda_sim: 0.0                 # S-Net aux
+lambda_dissim: 0.2              # D-Net aux
+lambda_cls: 0.25                # C-Net aux (query self-pass)
+lambda_proto: 0.5               # A2 prototype episodic loss (C-Net only)
+
+# Prototype loss options
+proto_temp: 1.0                 # softmax temperature for proto scores
+
+# ----- Fine-tuning (ONLY for test on unseen classes) -----
+fine_tune: true
+fine_tune_epochs: 1
+fine_tune_lr: 1.0e-5
+fine_tune_opt: "adam"
+fine_tune_classifier: false
+fine_tune_relation: true
+
+# ----- Evaluation / test episodic count -----
+num_episodes: 1000
+
+# ----- Augmentation -----
+augmentation:
+  flip: true
+  rotate: true
+  jitter: true
+
+# ----- Checkpoints -----
+checkpoint:
+  save_best_only: true
+  checkpoint_freq: 5
+
+# ----- Ablation controls -----
+# At TRAIN time: choose which branches feed the Relation module.
+# Options per branch token: "S" (similarity/top), "D" (dissimilarity/bottom), "C" (classification/mid)
+ablation_mode: "D+C" 
+relation_used_branches: ["D", "C"]
+
+freeze_top: true
+freeze_mid: false
+freeze_bottom: false
+
+# At TEST time: can run multiple ablations without retraining
+# The test script can iterate these modes and report per-mode metrics.
+test_relation_used_branches:
+  - ["S","D","C"]   # ALL
+  - ["S","C"]       # S+C
+  - ["D","C"]       # D+C
+  - ["S","D"]       # S+D
+  - ["S"]           # S only
+  - ["D"]           # D only
+  - ["C"]           # C only

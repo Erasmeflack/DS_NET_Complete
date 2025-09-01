@@ -1,5 +1,5 @@
-# config/5way_1shot.yaml
-experiment_name: "5way_1shot_all"
+# config/5way_1shot_C_S.yaml
+experiment_name: "5way_1shot_C_S"
 
 # ----- Episode shape -----
 n_way: 5
@@ -7,7 +7,7 @@ k_shot: 1
 q_query: 15
 
 # ----- Training -----
-is_train: false
+is_train: true
 epochs: 200
 episodes_per_epoch: 200         # cap per epoch (speeds up)
 val_episodes: 200               # cap for validation loop
@@ -53,8 +53,8 @@ num_model: 1
 # ----- Loss weights (joint multi-task) -----
 lambda_rel: 1.0                 # relation (primary)
 lambda_sim: 0.2                 # S-Net aux
-lambda_dissim: 0.2              # D-Net aux
-lambda_cls: 0.40                # C-Net aux (query self-pass)
+lambda_dissim: 0.0              # D-Net aux
+lambda_cls: 0.25                # C-Net aux (query self-pass)
 lambda_proto: 0.5               # A2 prototype episodic loss (C-Net only)
 
 # Prototype loss options
@@ -80,12 +80,17 @@ augmentation:
 # ----- Checkpoints -----
 checkpoint:
   save_best_only: true
-  checkpoint_freq: 10
+  checkpoint_freq: 5
 
 # ----- Ablation controls -----
 # At TRAIN time: choose which branches feed the Relation module.
 # Options per branch token: "S" (similarity/top), "D" (dissimilarity/bottom), "C" (classification/mid)
-train_relation_used_branches: ["S", "C"]
+ablation_mode: "S+C" 
+relation_used_branches: ["S", "C"]
+
+freeze_top: false
+freeze_mid: false
+freeze_bottom: true
 
 # At TEST time: can run multiple ablations without retraining
 # The test script can iterate these modes and report per-mode metrics.
