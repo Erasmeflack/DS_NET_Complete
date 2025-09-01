@@ -65,8 +65,8 @@ fine_tune: true
 fine_tune_epochs: 1
 fine_tune_lr: 1.0e-5
 fine_tune_opt: "adam"
-fine_tune_classifier: true
-fine_tune_relation: false
+fine_tune_classifier: false
+fine_tune_relation: true
 
 # ----- Evaluation / test episodic count -----
 num_episodes: 1000

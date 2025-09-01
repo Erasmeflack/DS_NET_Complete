@@ -197,84 +197,104 @@ def _evaluate_one_mode(cfg, model, test_loader, class_names, mode_tag: str):
 
     # Per-episode accuracy CSV for this mode
     iter_csv = os.path.join(base_log_dir, f"test_iter_{mode_tag}.csv")
+    
+    # Initialize the iterator here
+    test_loader_iter = iter(test_loader)
+    
+    # Open CSV once and use a writer object
     with open(iter_csv, "w", newline="") as f:
-        csv.writer(f).writerow(["episode", "accuracy", "num_queries", "correct", "timestamp"])
+        writer = csv.writer(f)
+        writer.writerow(["episode", "accuracy", "num_queries", "correct", "timestamp"])
+        
+        plot_dir = os.path.join(cfg.get("plot_dir", "./plots"), f"{cfg['experiment_name']}")
+        os.makedirs(plot_dir, exist_ok=True)
 
-    plot_dir = os.path.join(cfg.get("plot_dir", "./plots"), f"{cfg['experiment_name']}")
-    os.makedirs(plot_dir, exist_ok=True)
+        best_acc, worst_acc = -1.0, 101.0
+        sum_acc = 0.0
+        processed_eps = 0
+        actual_episode_count = 0  # Track actual episodes processed
+        best_preds, best_labels = [], []
+        worst_preds, worst_labels = [], []
 
-    best_acc, worst_acc = -1.0, 101.0
-    sum_acc = 0.0
-    processed_eps = 0
-    best_preds, best_labels = [], []
-    worst_preds, worst_labels = [], []
-
-    loader_iter = iter(test_loader)
-
-    for ep in range(num_episodes):
-        # --- fetch exactly one episode ---
-        try:
-            support_imgs, support_labels, query_imgs, query_labels = next(loader_iter)
-        except StopIteration:
-            loader_iter = iter(test_loader)
+        # Use tqdm for progress tracking
+        pbar = tqdm(total=num_episodes, desc=f"Evaluating {mode_tag}")
+        
+        for episode_idx in range(num_episodes):
+            # --- fetch exactly one episode ---
             try:
-                support_imgs, support_labels, query_imgs, query_labels = next(loader_iter)
+                support_imgs, support_labels, query_imgs, query_labels = next(test_loader_iter)
             except StopIteration:
-                # Empty loader—nothing to evaluate
-                break
+                # Reset iterator when exhausted
+                test_loader_iter = iter(test_loader)
+                try:
+                    support_imgs, support_labels, query_imgs, query_labels = next(test_loader_iter)
+                except StopIteration:
+                    # Truly empty loader - break out of the loop
+                    pbar.set_description(f"{mode_tag} - Loader exhausted")
+                    break
 
-        # Move to device & normalize shape
-        support_imgs   = support_imgs.to(device)
-        support_labels = support_labels.view(-1).to(device)
-        query_imgs     = query_imgs.to(device)
-        query_labels   = query_labels.view(-1).to(device)
+            # Move to device & normalize shape
+            support_imgs = support_imgs.to(device)
+            support_labels = support_labels.view(-1).to(device)
+            query_imgs = query_imgs.to(device)
+            query_labels = query_labels.view(-1).to(device)
 
-        if query_labels.numel() == 0:
-            # skip empty episode, don't count towards average
-            continue
-
-        if cfg.get("fine_tune", False):
-            print(f"[fine-tune:{mode_tag}] Starting per-episode fine-tune...")
-            _fine_tune_on_support(model, support_imgs, support_labels, query_imgs, query_labels, cfg)
-
-        # Inference for this episode
-        with torch.no_grad():
-            relation_scores, _ = model(query_imgs, support_imgs)
-            if relation_scores is None or relation_scores.numel() == 0:
-                # log as 0% accuracy if something odd occurs
-                ep_acc = 0.0
-                with open(iter_csv, "a", newline="") as f:
-                    csv.writer(f).writerow([ep, f"{ep_acc:.2f}", 0, 0, time.strftime("%Y-%m-%d %H:%M:%S")])
+            if query_labels.numel() == 0:
+                # skip empty episode, don't count towards average
+                pbar.update(1)
                 continue
 
-            preds = model.predict_from_relations(relation_scores, support_labels)  # [Q]
+            if cfg.get("fine_tune", False):
+                print(f"[fine-tune:{mode_tag}] Starting per-episode fine-tune...")
+                _fine_tune_on_support(model, support_imgs, support_labels, query_imgs, query_labels, cfg)
 
-        # Compute episode acc
-        preds_list  = preds.detach().cpu().tolist()
-        labels_list = query_labels.detach().cpu().tolist()
+            # Inference for this episode
+            with torch.no_grad():
+                relation_scores, _ = model(query_imgs, support_imgs)
+                if relation_scores is None or relation_scores.numel() == 0:
+                    # log as 0% accuracy if something odd occurs
+                    ep_acc = 0.0
+                    writer.writerow([actual_episode_count, f"{ep_acc:.2f}", 0, 0, 
+                                   time.strftime("%Y-%m-%d %H:%M:%S")])
+                    pbar.update(1)
+                    actual_episode_count += 1
+                    continue
 
-        correct = sum(int(p == l) for p, l in zip(preds_list, labels_list))
-        ep_acc = 100.0 * correct / max(1, len(labels_list))
-        sum_acc += ep_acc
-        processed_eps += 1
+                preds = model.predict_from_relations(relation_scores, support_labels)  # [Q]
 
-        # --- per-episode logging ---
-        with open(iter_csv, "a", newline="") as f:
-            csv.writer(f).writerow([ep, f"{ep_acc:.2f}", len(labels_list), correct, time.strftime("%Y-%m-%d %H:%M:%S")])
+            # Compute episode acc
+            preds_list = preds.detach().cpu().tolist()
+            labels_list = query_labels.detach().cpu().tolist()
 
-        # Track best/worst for confusion plots
-        if ep_acc > best_acc:
-            best_acc = ep_acc
-            best_preds, best_labels = list(preds_list), list(labels_list)
+            correct = sum(int(p == l) for p, l in zip(preds_list, labels_list))
+            ep_acc = 100.0 * correct / max(1, len(labels_list))
+            sum_acc += ep_acc
+            processed_eps += 1
 
-        if ep_acc < worst_acc:
-            worst_acc = ep_acc
-            worst_preds, worst_labels = list(preds_list), list(labels_list)
+            # --- per-episode logging ---
+            writer.writerow([actual_episode_count, f"{ep_acc:.2f}", len(labels_list), correct, 
+                           time.strftime("%Y-%m-%d %H:%M:%S")])
 
+            # Track best/worst for confusion plots
+            if ep_acc > best_acc:
+                best_acc = ep_acc
+                best_preds, best_labels = preds_list.copy(), labels_list.copy()
+
+            if ep_acc < worst_acc:
+                worst_acc = ep_acc
+                worst_preds, worst_labels = preds_list.copy(), labels_list.copy()
+
+            actual_episode_count += 1
+            pbar.update(1)
+            pbar.set_postfix({"avg_acc": f"{sum_acc/max(1, processed_eps):.1f}%"})
+
+        pbar.close()
+
+    # Rest of the function remains the same...
     # Average over episodes actually processed
     avg_acc = sum_acc / max(1, processed_eps)
-
-    # Confusions (guard empties)
+    
+    # Confusion matrix plotting and return statements...
     if best_labels:
         best_path = os.path.join(plot_dir, f"confmat_best_{mode_tag}.png")
         plot_confusion_from_preds(
