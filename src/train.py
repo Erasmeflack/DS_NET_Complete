@@ -152,8 +152,17 @@ def train(cfg):
         num_classes=cfg["n_way"],
         agg_method=cfg.get("agg_method", "mean"),
         device=device,
-        relation_used_branches=cfg.get("train_relation_used_branches", ["S","D","C"])
+        relation_used_branches=cfg.get("relation_used_branches", ["S","D","C"])
     ).to(device)
+    
+    # --- Print experiment setup for clarity ---
+    print(f"[*] Experiment: {cfg['experiment_name']}")
+    print(f"    Relation branches used: {model.relation_used_branches}")
+    print(f"    Loss weights -> "
+          f"Rel={cfg.get('lambda_rel',1.0)}, "
+          f"Sim={cfg.get('lambda_sim',0.0)}, "
+          f"Dsim={cfg.get('lambda_dissim',0.0)}, "
+          f"Cls={cfg.get('lambda_cls',0.0)}")
 
     # Optimizer & Scheduler
     optimizer = _make_optimizer(model, cfg)

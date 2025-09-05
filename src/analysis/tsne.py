@@ -61,19 +61,54 @@ def _run_tsne(feats_np: np.ndarray, perplexity: int = 15, seed: int = 1):
 
 def _plot_tsne(emb2d: np.ndarray, labels_np: np.ndarray, class_names: list, title: str, save_path: str):
     """
-    Save a 2D scatter. One point per sample, colored by class name.
+    Save a 2D scatter. One point per sample, colored by class name, with legend dynamically placed.
     """
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    plt.figure()  # one plot per figure (no subplots)
-    # Use class names for legend
-    for c, name in enumerate(class_names):
-        idx = labels_np == c
-        plt.scatter(emb2d[idx, 0], emb2d[idx, 1], label=name, s=16)
-    plt.legend(title="class", loc="best", fontsize=8)
-    plt.title(title)
+    plt.figure(figsize=(10, 8))
+    for i, class_name in enumerate(class_names):
+        idx = labels_np == i
+        plt.scatter(emb2d[idx, 0], emb2d[idx, 1], label=class_name, alpha=0.6, s=50)
+
+    # Dynamic legend placement
+    # Compute the bounding box of the t-SNE points
+    x_min, x_max = np.min(emb2d[:, 0]), np.max(emb2d[:, 0])
+    y_min, y_max = np.min(emb2d[:, 1]), np.max(emb2d[:, 1])
+    
+    # Define four possible legend positions (corners) in axes coordinates
+    corners = [
+        ('upper right', (0.95, 0.95)),
+        ('upper left', (0.05, 0.95)),
+        ('lower right', (0.95, 0.05)),
+        ('lower left', (0.05, 0.05))
+    ]
+    
+    # Calculate point density near each corner
+    def count_points_near_corner(x, y, corner_x, corner_y, threshold=0.1):
+        # Count points within a threshold distance from the corner (in normalized axes coords)
+        distances = np.sqrt(((emb2d[:, 0] - x_min) / (x_max - x_min) - corner_x)**2 +
+                            ((emb2d[:, 1] - y_min) / (y_max - y_min) - corner_y)**2)
+        return np.sum(distances < threshold)
+    
+    # Find the corner with the fewest points nearby
+    min_points = float('inf')
+    best_corner = corners[0]
+    for loc, (x, y) in corners:
+        points = count_points_near_corner(x, y, x, y)
+        if points < min_points:
+            min_points = points
+            best_corner = (loc, (x, y))
+    
+    # Place legend at the corner with the least density
+    plt.legend(fontsize=10, loc=best_corner[0], bbox_to_anchor=best_corner[1])
+    
+    plt.xlabel('t-SNE Dimension 1', fontsize=12)
+    plt.ylabel('t-SNE Dimension 2', fontsize=12)
+    plt.title(title, fontsize=14, pad=15)
+    plt.grid(True, linestyle='--', alpha=0.7)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=160)
+    plt.savefig(save_path, bbox_inches='tight', dpi=150)
     plt.close()
+    print(f"Saved t-SNE plot at {save_path}")
 
 @torch.no_grad()
 def tsne_one_val_episode(model, val_loader, cfg, tag: str = "start"):
@@ -109,5 +144,4 @@ def tsne_one_val_episode(model, val_loader, cfg, tag: str = "start"):
         feats = _extract_branch_feats(model, images, branch)    # (N,4096)
         emb2d = _run_tsne(feats, perplexity=15, seed=int(cfg.get("random_seed",1)))
         save_path = os.path.join(plot_dir, f"tsne_{tag}_{branch}.png")
-        _plot_tsne(emb2d, labels, class_names, f"t-SNE ({branch}) · {tag}", save_path)
-        print(f"[t-SNE] saved: {save_path}")
+        _plot_tsne(emb2d, labels, class_names, f't-SNE Visualization for SAR ATR ({branch} · {tag})', save_path)

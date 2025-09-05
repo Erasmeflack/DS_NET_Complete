@@ -7,10 +7,10 @@ k_shot: 5
 q_query: 15
 
 # ----- Training -----
-is_train: true
+is_train: false
 epochs: 200
 episodes_per_epoch: 200         # cap per epoch (speeds up)
-val_episodes: 200               # cap for validation loop
+val_episodes: 50               # cap for validation loop
 train_patience: 10
 resume: false                   # resume from latest ckpt
 best: true                      # prefer best ckpt when loading for eval
@@ -65,7 +65,7 @@ fine_tune: true
 fine_tune_epochs: 1
 fine_tune_lr: 1.0e-5
 fine_tune_opt: "adam"
-fine_tune_classifier: false
+fine_tune_classifier: true
 fine_tune_relation: true
 
 # ----- Evaluation / test episodic count -----

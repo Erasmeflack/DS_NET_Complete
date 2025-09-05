@@ -370,7 +370,7 @@ def test(cfg):
             num_classes=cfg["n_way"],
             agg_method=cfg.get("agg_method", "mean"),
             device=device,
-            relation_used_branches=cfg.get("train_relation_used_branches", ["S","D","C"])
+            relation_used_branches=cfg.get("relation_used_branches", ["S","D","C"])
         ).to(device)
 
         # Load best/latest weights
